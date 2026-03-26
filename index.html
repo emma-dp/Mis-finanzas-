@@ -233,12 +233,8 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
 <!-- ONEDRIVE MODAL -->
 <div class="modal-overlay" id="od-modal" onclick="maybeCloseODModal(event)">
   <div class="modal-card">
-    <h3>☁ Conectar OneDrive</h3>
-    <p class="sub">Tus datos se guardan en <strong>mis-finanzas-data.json</strong> en tu OneDrive, accesible desde cualquier dispositivo.</p>
-    <div style="background:var(--bg3);border:.5px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:14px;font-size:11px;color:var(--text2);line-height:1.8">
-      <span style="color:var(--text3);display:block;text-transform:uppercase;letter-spacing:.05em;font-size:10px;margin-bottom:3px">URI de redirección para Azure (cópiala)</span>
-      <span id="redirect-uri-val" style="color:var(--accent);word-break:break-all;font-size:12px">cargando...</span>
-    </div>
+    <h3>☁️ Conectar OneDrive</h3>
+    <p class="sub">Tus datos se guardan en <strong>mis-finanzas-data.json</strong> en tu OneDrive. Accesible desde cualquier dispositivo con tu cuenta Microsoft.</p>
     <button class="ms-btn" onclick="signInMicrosoft()">
       <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
         <rect x="1" y="1" width="7.5" height="7.5" fill="#F25022"/>
@@ -249,7 +245,7 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
       Iniciar sesión con Microsoft
     </button>
     <button class="btn-cancel-solo" onclick="closeODModal()">Cancelar</button>
-    <p class="modal-note">Se abrirá una ventana de Microsoft para autorizar.<br>Solo accede a los archivos de esta app en tu OneDrive.</p>
+    <p class="modal-note">Se abrirá una ventana de Microsoft para autorizar.<br>Solo accede al archivo de esta app en tu OneDrive.</p>
   </div>
 </div>
 
@@ -285,9 +281,8 @@ function saveLocal(){ localStorage.setItem("mf_data",JSON.stringify({data,nextId
 function loadLocal(){
   try{
     const s=localStorage.getItem("mf_data");
-    if(!s)return;
+    if(!s) return;
     const p=JSON.parse(s);
-    // Soporta formato antiguo (array directo) y nuevo ({data, nextId})
     if(Array.isArray(p)){ data=p; nextId=p.reduce((m,r)=>Math.max(m,r.id||0),0)+1; }
     else { data=p.data||[]; nextId=p.nextId||data.reduce((m,r)=>Math.max(m,r.id||0),0)+1; }
   }catch(e){ data=[]; nextId=1; }
@@ -318,15 +313,15 @@ function setSyncStatus(state,msg){
 }
 
 // ── MSAL ─────────────────────────────────────────────────────
+function isMobile(){ return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent); }
+
 function initMsal(){
   if(msalInstance) return;
-  // redirectUri debe coincidir EXACTAMENTE con lo registrado en Azure
-  const redirectUri = window.location.origin + window.location.pathname;
   msalInstance=new msal.PublicClientApplication({
     auth:{
       clientId:CLIENT_ID,
       authority:"https://login.microsoftonline.com/consumers",
-      redirectUri: redirectUri,
+      redirectUri: window.location.origin + window.location.pathname,
     },
     cache:{cacheLocation:"localStorage",storeAuthStateInCookie:true}
   });
@@ -335,12 +330,16 @@ function initMsal(){
 async function signInMicrosoft(){
   initMsal();
   closeODModal();
-  setSyncStatus("loading","Conectando con Microsoft...");
+  setSyncStatus("loading","Redirigiendo a Microsoft...");
   try {
-    const resp=await msalInstance.loginPopup({scopes:SCOPES});
-    msalInstance.setActiveAccount(resp.account);
-    await acquireToken();
-  } catch(e){ setSyncStatus("err","Error al iniciar sesión: "+e.message); }
+    if(isMobile()){
+      await msalInstance.loginRedirect({scopes:SCOPES});
+    } else {
+      const resp=await msalInstance.loginPopup({scopes:SCOPES});
+      msalInstance.setActiveAccount(resp.account);
+      await acquireToken();
+    }
+  } catch(e){ setSyncStatus("err","Error: "+e.message); }
 }
 
 async function acquireToken(){
@@ -352,9 +351,14 @@ async function acquireToken(){
     const resp=await msalInstance.acquireTokenSilent({scopes:SCOPES,account:accounts[0]});
     odToken=resp.accessToken; odConnected=true; await odSync(); return true;
   } catch(e){
+    setSyncStatus("loading","Renovando sesión...");
     try {
-      const resp=await msalInstance.acquireTokenPopup({scopes:SCOPES});
-      odToken=resp.accessToken; odConnected=true; await odSync(); return true;
+      if(isMobile()){
+        await msalInstance.acquireTokenRedirect({scopes:SCOPES});
+      } else {
+        const resp=await msalInstance.acquireTokenPopup({scopes:SCOPES});
+        odToken=resp.accessToken; odConnected=true; await odSync(); return true;
+      }
     } catch(e2){ setSyncStatus("err","Error de autenticación: "+e2.message); return false; }
   }
 }
@@ -394,11 +398,7 @@ async function odUpload(){
 }
 
 // ── MODAL ────────────────────────────────────────────────────
-function openODModal(){
-  const uri = window.location.origin + window.location.pathname;
-  document.getElementById("redirect-uri-val").textContent = uri;
-  document.getElementById("od-modal").classList.add("open");
-}
+function openODModal(){ document.getElementById("od-modal").classList.add("open"); }
 function closeODModal(){ document.getElementById("od-modal").classList.remove("open"); }
 function maybeCloseODModal(e){ if(e.target===document.getElementById("od-modal")) closeODModal(); }
 
