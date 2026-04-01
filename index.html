@@ -52,8 +52,6 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
 .sync-dot{width:7px;height:7px;border-radius:50%;background:var(--text3);flex-shrink:0;transition:background .3s}
 .sync-dot.ok{background:var(--green)}.sync-dot.err{background:var(--red)}.sync-dot.loading{background:var(--amber);animation:pulse 1s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-.export-btn{background:none;border:.5px solid var(--border);color:var(--text3);border-radius:99px;padding:4px 12px;font-size:11px;cursor:pointer;transition:all .15s;margin-left:4px}
-.export-btn:hover{border-color:var(--border2);color:var(--green)}
 .sync-btn{margin-left:auto;background:none;border:.5px solid var(--border);color:var(--text3);border-radius:99px;padding:4px 12px;font-size:11px;cursor:pointer;transition:all .15s}
 .sync-btn:hover{border-color:var(--border2);color:var(--text)}
 .hero{padding:20px 20px 16px}
@@ -162,7 +160,7 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
     <span id="sync-label">Sin conexión a OneDrive</span>
     <button class="sync-btn" id="sync-action-btn" onclick="openODModal()">&#9729; Conectar OneDrive</button>
     <button class="sync-btn" id="sync-signout-btn" onclick="signOut()" style="display:none;margin-left:4px;color:var(--red);border-color:var(--red)">&#x2715; Salir</button>
-    <button class="export-btn" id="export-btn" onclick="exportarExcel()" title="Exportar CSV a OneDrive">&#8595; CSV</button>
+    <button style="background:none;border:.5px solid var(--border);color:var(--text3);border-radius:99px;padding:4px 10px;font-size:11px;cursor:pointer;margin-left:4px" id="export-btn" onclick="exportarExcel()">&#8595; CSV</button>
   </div>
 
 
@@ -389,17 +387,18 @@ async function acquireToken(){
   }
 }
 
-// ── HELPERS CSV ──────────────────────────────────────────────
+
+// ── CSV HELPERS ───────────────────────────────────────────────
 function buildCSV(){
-  const TIPO_LABEL={ingreso:"Ingreso",gasto:"Gasto",deuda:"Deuda activa",prestamo:"Préstamo dado",pago_deuda:"Pago de deuda",cobro_prestamo:"Cobro préstamo"};
-  const esc=v=>'"'+String(v||"").replace(/"/g,'""')+'"';
-  const rows=[["Fecha","Tipo","Categoria","Descripcion","Nota","Monto","Flujo"].map(esc).join(",")];
+  const TL={ingreso:"Ingreso",gasto:"Gasto",deuda:"Deuda activa",prestamo:"Prestamo dado",pago_deuda:"Pago de deuda",cobro_prestamo:"Cobro prestamo"};
+  const esc=v=>'"'+String(v==null?"":v).replace(/"/g,'""')+'"';
+  const header=["Fecha","Tipo","Categoria","Descripcion","Nota","Monto","Flujo"].map(esc).join(",");
+  const lines=[header];
   [...data].sort((a,b)=>new Date(a.fecha)-new Date(b.fecha)).forEach(r=>{
     const flujo=(r.tipo==="ingreso"||r.tipo==="cobro_prestamo")?"Entrada":r.tipo==="deuda"?"Informativo":"Salida";
-    rows.push([r.fecha,TIPO_LABEL[r.tipo]||r.tipo,r.cat||"",r.desc||"",r.nota||"",r.monto,flujo].map(esc).join(","));
+    lines.push([r.fecha,TL[r.tipo]||r.tipo,r.cat||"",r.desc||"",r.nota||"",r.monto,flujo].map(esc).join(","));
   });
-  return "﻿"+rows.join("
-"); // BOM para que Excel abra con tildes correctamente
+  return "\uFEFF"+lines.join("\r\n");
 }
 
 async function refreshToken(){
@@ -412,54 +411,49 @@ async function refreshToken(){
   }catch(e){}
 }
 
-// ── EXPORT SILENCIOSO (auto tras cada guardado) ──────────────
+async function subirCSV(){
+  await refreshToken();
+  const blob=new Blob([buildCSV()],{type:"text/csv;charset=utf-8;"});
+  const res=await fetch(
+    "https://graph.microsoft.com/v1.0/me/drive/root:/mis-finanzas.csv:/content",
+    {method:"PUT",headers:{Authorization:"Bearer "+odToken,"Content-Type":"text/csv"},body:blob}
+  );
+  if(!res.ok) throw new Error("HTTP "+res.status);
+}
+
+// Auto-export silencioso tras cada guardado
 async function exportarExcelSilente(){
   if(!odToken||!odConnected) return;
-  await refreshToken();
   const btn=document.getElementById("export-btn");
-  if(btn){btn.textContent="↑ CSV";btn.style.color="var(--amber)";}
+  if(btn){btn.textContent="\u2191 CSV";btn.style.color="var(--amber)";}
   try{
-    const csv=buildCSV();
-    const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"});
-    const res=await fetch(
-      "https://graph.microsoft.com/v1.0/me/drive/root:/mis-finanzas.csv:/content",
-      {method:"PUT",headers:{Authorization:"Bearer "+odToken,"Content-Type":"text/csv"},body:blob}
-    );
-    if(!res.ok) throw new Error("HTTP "+res.status);
-    if(btn){btn.textContent="✓ CSV";btn.style.color="var(--green)";setTimeout(()=>{btn.textContent="↓ CSV";btn.style.color="";},2500);}
+    await subirCSV();
+    if(btn){btn.textContent="\u2713 CSV";btn.style.color="var(--green)";setTimeout(()=>{btn.textContent="\u2193 CSV";btn.style.color="";},2500);}
   }catch(e){
-    if(btn){btn.textContent="✗ CSV";btn.style.color="var(--red)";setTimeout(()=>{btn.textContent="↓ CSV";btn.style.color="";},3000);}
+    if(btn){btn.textContent="\u2717 CSV";btn.style.color="var(--red)";setTimeout(()=>{btn.textContent="\u2193 CSV";btn.style.color="";},3000);}
     setSyncStatus("err","Error CSV: "+e.message);
   }
 }
 
-// ── EXPORT MANUAL A CSV ──────────────────────────────────────
+// Export manual (botón)
 async function exportarExcel(){
   const btn=document.getElementById("export-btn");
   btn.textContent="...";btn.disabled=true;
   try{
-    await refreshToken();
-    const csv=buildCSV();
-    const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"});
     if(odConnected&&odToken){
-      const res=await fetch(
-        "https://graph.microsoft.com/v1.0/me/drive/root:/mis-finanzas.csv:/content",
-        {method:"PUT",headers:{Authorization:"Bearer "+odToken,"Content-Type":"text/csv"},body:blob}
-      );
-      if(!res.ok) throw new Error("HTTP "+res.status);
-      btn.textContent="✓ CSV";btn.style.color="var(--green)";
-      setTimeout(()=>{btn.textContent="↓ CSV";btn.style.color="";btn.disabled=false;},3000);
+      await subirCSV();
+      btn.textContent="\u2713 CSV";btn.style.color="var(--green)";
     } else {
-      // Sin OneDrive: descarga local
+      const blob=new Blob([buildCSV()],{type:"text/csv;charset=utf-8;"});
       const url=URL.createObjectURL(blob);
       const a=document.createElement("a");a.href=url;a.download="mis-finanzas.csv";a.click();
       URL.revokeObjectURL(url);
-      btn.textContent="✓ CSV";btn.style.color="var(--green)";
-      setTimeout(()=>{btn.textContent="↓ CSV";btn.style.color="";btn.disabled=false;},3000);
+      btn.textContent="\u2713 CSV";btn.style.color="var(--green)";
     }
+    setTimeout(()=>{btn.textContent="\u2193 CSV";btn.style.color="";btn.disabled=false;},3000);
   }catch(e){
-    btn.textContent="✗ CSV";btn.style.color="var(--red)";
-    setTimeout(()=>{btn.textContent="↓ CSV";btn.style.color="";btn.disabled=false;},3000);
+    btn.textContent="\u2717 CSV";btn.style.color="var(--red)";
+    setTimeout(()=>{btn.textContent="\u2193 CSV";btn.style.color="";btn.disabled=false;},3000);
     setSyncStatus("err","Error CSV: "+e.message);
   }
 }
@@ -626,9 +620,9 @@ function guardar(){
   const rec={tipo:currentTipo,monto,fecha,cat:document.getElementById("f-cat").value,desc:document.getElementById("f-desc").value.trim(),nota:document.getElementById("f-nota").value.trim()};
   if(editingId){ Object.assign(data.find(x=>x.id===editingId),rec); } else { data.push({id:++nextId,...rec}); }
   save(); closeEntry(); render();
-  if(odConnected && odToken) exportarExcelSilente();
+  if(odConnected&&odToken) exportarExcelSilente();
 }
-function eliminar(id){ if(confirm("¿Eliminar este registro?")){ data=data.filter(r=>r.id!==id); save(); render(); if(odConnected && odToken) exportarExcelSilente(); } }
+function eliminar(id){ if(confirm("¿Eliminar este registro?")){ data=data.filter(r=>r.id!==id); save(); render(); if(odConnected&&odToken) exportarExcelSilente(); } }
 
 // ── TEMA ─────────────────────────────────────────────────────
 function toggleTheme(){ const isLight=document.body.classList.toggle("light"); document.getElementById("theme-btn").textContent=isLight?"☀":"☾"; localStorage.setItem("mf_theme",isLight?"light":"dark"); renderChart(getMes()); }
