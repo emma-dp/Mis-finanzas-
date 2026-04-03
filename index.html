@@ -622,15 +622,40 @@ async function acquireToken(){
 
 // ── CSV HELPERS ───────────────────────────────────────────────
 function buildCSV(){
-  const TL={ingreso:"Ingreso",gasto:"Gasto",deuda:"Deuda activa",prestamo:"Prestamo dado",pago_deuda:"Pago de deuda",cobro_prestamo:"Cobro prestamo"};
   const esc=v=>'"'+String(v==null?"":v).replace(/"/g,'""')+'"';
-  const header=["Fecha","Tipo","Categoria","Descripcion","Nota","Monto","Flujo"].map(esc).join(",");
-  const lines=[header];
+  const lines=[["Fecha","Tipo","Categoria","Descripcion","Nota","Monto","Flujo","Acreedor_Persona"].map(esc).join(",")];
+
+  // Transacciones normales
+  const TL={ingreso:"Ingreso",gasto:"Gasto",deuda:"Deuda (transac.)",prestamo:"Prestamo (transac.)",pago_deuda:"Pago de deuda",cobro_prestamo:"Cobro prestamo"};
   [...data].sort((a,b)=>new Date(a.fecha)-new Date(b.fecha)).forEach(r=>{
-    const flujo=(r.tipo==="ingreso"||r.tipo==="cobro_prestamo")?"Entrada":r.tipo==="deuda"?"Informativo":"Salida";
-    lines.push([r.fecha,TL[r.tipo]||r.tipo,r.cat||"",r.desc||"",r.nota||"",r.monto,flujo].map(esc).join(","));
+    const flujo=(r.tipo==="ingreso"||r.tipo==="cobro_prestamo")?"Entrada":"Salida";
+    lines.push([r.fecha,TL[r.tipo]||r.tipo,r.cat||"",r.desc||"",r.nota||"",r.monto,flujo,""].map(esc).join(","));
   });
-  return "\uFEFF"+lines.join("\r\n");
+
+  // Préstamos del módulo
+  loans.forEach(loan=>{
+    lines.push([loan.fecha,"Préstamo dado",loan.cat||"","Prestado a "+loan.persona,loan.nota||"",loan.monto,"Salida",loan.persona].map(esc).join(","));
+    (loan.abonos||[]).forEach(a=>{
+      lines.push([a.fecha,"Abono recibido","","Abono de "+loan.persona,a.nota||"",a.monto,"Entrada",loan.persona].map(esc).join(","));
+    });
+  });
+
+  // Deudas del módulo — la deuda en sí es informativa, los pagos sí afectan
+  debts.forEach(debt=>{
+    lines.push([debt.fecha,"Deuda registrada",debt.cat||"",debt.desc||"",debt.nota||"",debt.monto,"Informativo",debt.acreedor].map(esc).join(","));
+    (debt.pagos||[]).forEach(p=>{
+      lines.push([p.fecha,"Pago de deuda",debt.cat||"","Pago a "+debt.acreedor,p.nota||"",p.monto,"Salida",debt.acreedor].map(esc).join(","));
+    });
+  });
+
+  // Ordenar todo por fecha
+  const header=lines[0];
+  const rows=lines.slice(1).sort((a,b)=>{
+    const fa=a.split(",")[0].replace(/"/g,"");
+    const fb=b.split(",")[0].replace(/"/g,"");
+    return new Date(fa)-new Date(fb);
+  });
+  return "\uFEFF"+[header,...rows].join("\r\n");
 }
 
 async function refreshToken(){
@@ -1366,13 +1391,31 @@ loadDebts();
 setSyncStatus("none","Sin conexión a OneDrive");
 render();
 
-// Reconectar sesión automáticamente si ya había iniciado sesión antes
-window.addEventListener("load",async()=>{
-  initMsal();
-  await msalInstance.handleRedirectPromise().catch(()=>{});
-  const accounts=msalInstance.getAllAccounts();
-  if(accounts.length>0){ setSyncStatus("loading","Reconectando OneDrive..."); await acquireToken(); }
-});
+// MSAL debe inicializarse y manejar el redirect ANTES de cualquier otra cosa.
+// Si venimos de un loginRedirect, handleRedirectPromise devuelve la cuenta.
+(async()=>{
+  try{
+    initMsal();
+    // Procesar resultado del redirect (si venimos de login.microsoftonline.com)
+    const redirectResult = await msalInstance.handleRedirectPromise();
+    if(redirectResult && redirectResult.account){
+      // Acabamos de volver del redirect — guardar cuenta y conectar
+      msalInstance.setActiveAccount(redirectResult.account);
+      odToken = redirectResult.accessToken;
+      odConnected = true;
+      await odSync();
+      return;
+    }
+    // No hubo redirect — intentar reconectar con sesión guardada
+    const accounts = msalInstance.getAllAccounts();
+    if(accounts.length > 0){
+      setSyncStatus("loading","Reconectando OneDrive...");
+      await acquireToken();
+    }
+  } catch(e){
+    setSyncStatus("err","Error de inicio: "+e.message);
+  }
+})();
 </script>
 </body>
 </html>
